@@ -162,7 +162,7 @@ def test_image_local_by_default(make_client):
                                                     "size": "1536x1024"})
     assert r.status_code == 200 and r.headers["x-pair-route"].startswith("local")
     assert r.json()["data"][0]["b64_json"] == "UE5HTE9DQUw="     # b"PNGLOCAL"
-    assert client.flux.requests[0] == {"prompt": "un faro al atardecer", "referencias": [], "ancho": 1536, "alto": 1024}
+    assert client.flux.requests[0] == {"prompt": "un faro al atardecer", "referencias": [], "mejorar": True, "ancho": 1536, "alto": 1024}
     assert not cloud.requests
 
 
