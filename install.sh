@@ -14,27 +14,28 @@ ask() { local prompt="$1" default="$2" reply; read -r -p "$prompt [$default]: " 
 
 say "1/5 Comprobando herramientas"
 if ! xcode-select -p >/dev/null 2>&1; then
-  echo "Faltan las herramientas de línea de órdenes de Apple (git y python3)."
+  echo "Faltan las herramientas de línea de órdenes de Apple (git)."
   echo "Se abrirá su instalador: acéptalo y, cuando termine, vuelve a ejecutar este comando."
   xcode-select --install || true
   exit 1
 fi
-PY=$(command -v python3)
-"$PY" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' || {
-  echo "PAIR necesita Python 3.11 o superior; tienes $("$PY" --version)."
-  echo "Instálalo desde https://www.python.org/downloads/macos/ o con: brew install python@3.12"
-  exit 1
-}
-echo "git y $("$PY" --version) disponibles"
+# uv descarga un Python moderno solo para PAIR; no necesita Homebrew ni tocar el Python del sistema.
+UV="$HOME/.local/bin/uv"
+if [ ! -x "$UV" ]; then
+  echo "Instalando uv (gestor de Python) en ~/.local/bin"
+  curl -LsSf https://astral.sh/uv/install.sh | env UV_NO_MODIFY_PATH=1 sh >/dev/null
+fi
+echo "git y uv disponibles"
 
 say "2/5 Descargando PAIR en $DIR"
 if [ -d "$DIR/.git" ]; then git -C "$DIR" pull --ff-only; else git clone "$REPO" "$DIR"; fi
 cd "$DIR"
 
-say "3/5 Instalando dependencias"
-"$PY" -m venv .venv
-.venv/bin/pip install -q --upgrade pip
-.venv/bin/pip install -q -e .
+say "3/5 Instalando Python 3.12 y dependencias"
+"$UV" venv --quiet --allow-existing --python 3.12 .venv
+"$UV" pip install --quiet --python .venv/bin/python -e .
+PY="$DIR/.venv/bin/python"
+echo "$("$PY" --version) listo en $DIR/.venv"
 mkdir -p "$HOME/.local/bin"
 ln -sf "$DIR/.venv/bin/pair" "$HOME/.local/bin/pair"
 
