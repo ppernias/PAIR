@@ -1,0 +1,54 @@
+# Reglas por defecto de PAIR. Se evalúan en orden; la primera que decide, gana.
+# Este fichero es el punto de partida: en fases posteriores PAIR ajustará
+# los umbrales con el uso.
+
+# 1. Etiquetas explícitas al inicio o al final del último mensaje del usuario.
+#    Se eliminan del texto antes de enviarlo al modelo.
+tags:
+  local: ["@local"]
+  cloud: ["@frontera", "@cloud"]
+
+# 2. Privacidad: si el texto coincide con alguno de estos patrones,
+#    la petición es sensible y NUNCA sale del equipo.
+sensitive_patterns:
+  - '\b\d{8}[A-HJ-NP-TV-Z]\b'                 # DNI
+  - '\b[XYZ]\d{7}[A-HJ-NP-TV-Z]\b'            # NIE
+  - '\bES\d{2}(?:\s?\d{4}){5}\b'              # IBAN español
+  - '(?i)\b(confidencial|datos personales|expediente del alumn[oa])\b'
+
+# 3. Capacidades que el modelo local no cubre: van a la nube.
+force_cloud_if:
+  images: true          # la petición incluye imágenes
+  over_local_context: true
+
+# 4. Palabras clave del último mensaje del usuario (sin distinguir mayúsculas).
+keywords:
+  local:
+    - resume
+    - resumen
+    - traduce
+    - traducción
+    - reformula
+    - corrige la ortografía
+    - extrae
+    - clasifica
+    - convierte a json
+    - renombra
+    - formatea
+  cloud:
+    - diseña
+    - arquitectura
+    - depura
+    - demuestra
+    - analiza en profundidad
+    - estrategia
+    - razona paso a paso
+    - por qué falla
+
+# 5. Si nada de lo anterior decide, cuenta la longitud del prompt (en tokens aprox.)
+#    y el modo activo.
+default_by_mode:
+  ahorro: local
+  equilibrado:
+    local_if_prompt_tokens_below: 1500
+  calidad: cloud

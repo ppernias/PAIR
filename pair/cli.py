@@ -1,0 +1,62 @@
+"""Línea de órdenes: pair serve | stats | log | bench."""
+
+from __future__ import annotations
+
+import argparse
+import sys
+
+from . import config as config_mod
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="pair", description="PAIR — Personal AI Router")
+    parser.add_argument("-c", "--config", default="config.yaml", help="ruta a config.yaml")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    sub.add_parser("serve", help="arranca el proxy")
+    p_stats = sub.add_parser("stats", help="resumen de ahorro")
+    p_stats.add_argument("--days", type=float, default=30)
+    p_log = sub.add_parser("log", help="últimas decisiones")
+    p_log.add_argument("-n", type=int, default=20)
+    p_bench = sub.add_parser("bench", help="exporta el banco de peticiones a CSV para etiquetarlo")
+    p_bench.add_argument("out", nargs="?", default="bench.csv")
+
+    args = parser.parse_args(argv)
+    cfg = config_mod.load(args.config)
+
+    if args.command == "serve":
+        import uvicorn
+
+        from .app import create_app
+
+        if not cfg.cloud.api_key:
+            print(f"Aviso: la variable {cfg.cloud.api_key_env} está vacía; las peticiones a la nube fallarán.",
+                  file=sys.stderr)
+        print(f"PAIR escuchando en http://{cfg.host}:{cfg.port}  (modo {cfg.mode})")
+        uvicorn.run(create_app(cfg), host=cfg.host, port=cfg.port, log_level="warning")
+        return 0
+
+    from .store import Store
+
+    store = Store(cfg.log_path, cfg.cloud.price_input_per_mtok, cfg.cloud.price_output_per_mtok)
+    if args.command == "stats":
+        s = store.stats(args.days)
+        print(f"Últimos {s['days']:g} días: {s['requests']} peticiones")
+        print(f"  Resueltas en local: {s['local']} ({s['local_pct']}%)")
+        print(f"  Con fallback: {s['fell_back']} · sensibles: {s['sensitive']} · errores: {s['errors']}")
+        print(f"  Coste real: {s['cost_usd']:.4f} USD · todo a la nube: {s['all_cloud_usd']:.4f} USD")
+        print(f"  Ahorro: {s['saved_usd']:.4f} USD ({s['saved_pct']}%)")
+    elif args.command == "log":
+        for row in store.recent(args.n):
+            when, endpoint, target, reason, model, pt, ct, ms, fb, err = row
+            flag = " ↺" if fb else ""
+            tail = f"  ERROR {err[:60]}" if err else f"  {pt}+{ct} tok  {ms} ms"
+            print(f"{when}  {endpoint:<9} {target:<5}{flag}  {reason}  [{model}]{tail}")
+    elif args.command == "bench":
+        n = store.export_bench(args.out)
+        print(f"{n} peticiones exportadas a {args.out}. Rellena la columna 'etiqueta' con local o cloud.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

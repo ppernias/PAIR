@@ -1,0 +1,144 @@
+import json
+
+from .conftest import FakeBackend
+
+
+def sse_events(text: str) -> list[tuple[str | None, dict]]:
+    events, name = [], None
+    for line in text.splitlines():
+        if line.startswith("event:"):
+            name = line[6:].strip()
+        elif line.startswith("data:") and line[5:].strip() != "[DONE]":
+            events.append((name, json.loads(line[5:])))
+            name = None
+    return events
+
+
+# ------------------------------------------------------------------ OpenAI
+
+def test_openai_local(make_client):
+    client, local, cloud = make_client()
+    r = client.post("/v1/chat/completions", json={"model": "x", "messages": [{"role": "user", "content": "resume esto"}]})
+    assert r.status_code == 200
+    assert r.json()["choices"][0]["message"]["content"] == "hola desde local"
+    assert r.headers["x-pair-route"].startswith("local")
+    assert local.requests[0]["model"] == "qwen-local" and not cloud.requests
+
+
+def test_openai_stream_cloud_sends_completion_tokens_param(make_client):
+    client, _, cloud = make_client()
+    r = client.post("/v1/chat/completions", json={
+        "model": "x", "stream": True, "max_tokens": 50,
+        "messages": [{"role": "user", "content": "@frontera piensa"}]})
+    events = sse_events(r.text)
+    text = "".join(e["choices"][0]["delta"].get("content", "") for _, e in events if e.get("choices"))
+    assert text.strip() == "hola desde cloud"
+    assert r.text.rstrip().endswith("[DONE]")
+    assert cloud.requests[0]["max_completion_tokens"] == 50 and "max_tokens" not in cloud.requests[0]
+    assert cloud.requests[0]["messages"][0]["content"] == "piensa"
+
+
+# ------------------------------------------------------------------ Anthropic
+
+def test_anthropic_tool_roundtrip_input(make_client):
+    client, local, _ = make_client()
+    r = client.post("/v1/messages", json={
+        "model": "claude-x", "max_tokens": 100, "system": [{"type": "text", "text": "eres útil"}],
+        "tools": [{"name": "ls", "description": "lista", "input_schema": {"type": "object", "properties": {}}}],
+        "messages": [
+            {"role": "user", "content": "resume la carpeta"},
+            {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_1", "name": "ls", "input": {}}]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "a.txt"}]},
+        ]})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["type"] == "message" and body["model"] == "claude-x"
+    assert body["content"][0]["text"] == "hola desde local"
+    sent = local.requests[0]
+    assert [m["role"] for m in sent["messages"]] == ["system", "user", "assistant", "tool"]
+    assert sent["messages"][3]["tool_call_id"] == "toolu_1"
+    assert sent["tools"][0]["function"]["name"] == "ls"
+
+
+def test_anthropic_stream_tool_call(make_client):
+    cloud = FakeBackend("cloud", "gpt-test", tool_call={"name": "ls", "args": {"path": "/tmp"}})
+    client, _, _ = make_client(cloud=cloud, mode="calidad")
+    r = client.post("/v1/messages", json={
+        "model": "claude-x", "max_tokens": 100, "stream": True,
+        "tools": [{"name": "ls", "input_schema": {"type": "object"}}],
+        "messages": [{"role": "user", "content": "mira /tmp"}]})
+    events = sse_events(r.text)
+    names = [n for n, _ in events]
+    assert names[0] == "message_start" and names[-1] == "message_stop"
+    start = next(e for n, e in events if n == "content_block_start")
+    assert start["content_block"]["type"] == "tool_use" and start["content_block"]["name"] == "ls"
+    partial = "".join(e["delta"]["partial_json"] for n, e in events if n == "content_block_delta")
+    assert json.loads(partial) == {"path": "/tmp"}
+    delta = next(e for n, e in events if n == "message_delta")
+    assert delta["delta"]["stop_reason"] == "tool_use"
+
+
+def test_anthropic_count_tokens(make_client):
+    client, _, _ = make_client()
+    r = client.post("/v1/messages/count_tokens", json={"model": "c", "messages": [{"role": "user", "content": "x" * 400}]})
+    assert r.json()["input_tokens"] == 100
+
+
+# ------------------------------------------------------------------ Gemini
+
+def test_gemini_function_call(make_client):
+    local = FakeBackend("local", "qwen-local", tool_call={"name": "tiempo", "args": {"ciudad": "Alicante"}})
+    client, local, _ = make_client(local=local)
+    r = client.post("/v1beta/models/gemini-x:generateContent", json={
+        "systemInstruction": {"parts": [{"text": "sé breve"}]},
+        "contents": [{"role": "user", "parts": [{"text": "¿qué tiempo hace?"}]}],
+        "tools": [{"functionDeclarations": [{"name": "tiempo", "parameters": {
+            "type": "OBJECT", "properties": {"ciudad": {"type": "STRING"}}}}]}],
+        "generationConfig": {"maxOutputTokens": 64}})
+    assert r.status_code == 200
+    part = r.json()["candidates"][0]["content"]["parts"][0]
+    assert part["functionCall"]["name"] == "tiempo" and part["functionCall"]["args"] == {"ciudad": "Alicante"}
+    sent = local.requests[0]
+    assert sent["tools"][0]["function"]["parameters"]["properties"]["ciudad"]["type"] == "string"
+    assert sent["max_tokens"] == 64
+
+
+def test_gemini_stream(make_client):
+    client, _, _ = make_client()
+    r = client.post("/v1beta/models/gemini-x:streamGenerateContent?alt=sse",
+                    json={"contents": [{"role": "user", "parts": [{"text": "hola"}]}]})
+    events = sse_events(r.text)
+    text = "".join(p.get("text", "") for _, e in events for p in e["candidates"][0]["content"]["parts"])
+    assert text.strip() == "hola desde local"
+    assert events[-1][1]["candidates"][0]["finishReason"] == "STOP"
+
+
+# ------------------------------------------------------------------ fallback, privacidad y registro
+
+def test_local_down_falls_back_to_cloud(make_client):
+    client, _, cloud = make_client(local=FakeBackend("local", "q", down=True))
+    r = client.post("/v1/chat/completions", json={"messages": [{"role": "user", "content": "resume"}]})
+    assert r.status_code == 200 and cloud.requests
+    assert "fallback" in r.headers["x-pair-route"]
+
+
+def test_sensitive_with_local_down_fails_instead_of_leaking(make_client):
+    client, _, cloud = make_client(local=FakeBackend("local", "q", down=True))
+    r = client.post("/v1/messages", json={"model": "c", "max_tokens": 10,
+                                          "messages": [{"role": "user", "content": "DNI 12345678Z"}]})
+    assert r.status_code == 502 and r.json()["type"] == "error"
+    assert not cloud.requests
+
+
+def test_stats_and_bench(make_client, tmp_path):
+    client, _, _ = make_client()
+    client.post("/v1/chat/completions", json={"messages": [{"role": "user", "content": "resume esto"}]})
+    client.post("/v1/chat/completions", json={"messages": [{"role": "user", "content": "@frontera hola"}]})
+    client.post("/v1/chat/completions", json={"messages": [{"role": "user", "content": "DNI 12345678Z"}]})
+    s = client.get("/pair/stats").json()
+    assert s["requests"] == 3 and s["local"] == 2 and s["sensitive"] == 1
+    # 100 tok entrada a 1 USD/M + 50 salida a 10 USD/M = 0.0006 por petición
+    assert s["all_cloud_usd"] == 0.0018 and s["cost_usd"] == 0.0006
+    store = client.app.state.pair.store
+    n = store.export_bench(str(tmp_path / "bench.csv"))
+    assert n == 2  # la sensible no se guarda

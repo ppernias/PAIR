@@ -1,0 +1,32 @@
+# PAIR — configuración. Copia este fichero como config.yaml y ajústalo.
+
+server:
+  host: 127.0.0.1        # solo accesible desde tu equipo
+  port: 8787
+
+mode: equilibrado        # ahorro | equilibrado | calidad
+
+local:
+  name: lmstudio
+  base_url: http://localhost:1234/v1   # servidor de LM Studio
+  model: ""                            # vacío = el primer modelo cargado en LM Studio
+  max_context_tokens: 16000            # por encima, la petición va a la nube
+  timeout_s: 120
+
+cloud:
+  name: openai
+  base_url: https://api.openai.com/v1
+  model: gpt-5                         # modelo de frontera de referencia
+  api_key_env: OPENAI_API_KEY          # la clave se lee de esta variable de entorno
+  timeout_s: 300
+  # Precio en USD por millón de tokens. Compruébalo en https://openai.com/api/pricing
+  # antes de fiarte del cálculo de ahorro.
+  price_input_per_mtok: 1.25
+  price_output_per_mtok: 10.0
+
+log:
+  path: ~/.pair/pair.db
+  capture_prompts: true    # guarda el último mensaje del usuario para el banco de pruebas
+                           # (nunca se guardan las peticiones marcadas como sensibles)
+
+rules_path: rules.yaml
