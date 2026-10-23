@@ -31,7 +31,7 @@ class Pair:
 
     def __init__(self, cfg: Config, local_transport: httpx.AsyncBaseTransport | None = None,
                  cloud_transport: httpx.AsyncBaseTransport | None = None,
-                 image_transport: httpx.AsyncBaseTransport | None = None):
+                 image_transport: httpx.AsyncBaseTransport | None = None, echo: bool = False):
         self.cfg = cfg
         self.images = ImageService(cfg.images, cfg.cloud, cfg.rules, cfg.mode, image_transport, cloud_transport)
         self.clients = {
@@ -39,7 +39,7 @@ class Pair:
             CLOUD: Client(cfg.cloud, cloud_transport, is_cloud=True),
         }
         self.store = Store(cfg.log_path, cfg.cloud.price_input_per_mtok, cfg.cloud.price_output_per_mtok,
-                           cfg.capture_prompts)
+                           cfg.capture_prompts, echo=echo)
 
     async def close(self) -> None:
         for c in self.clients.values():
@@ -190,8 +190,8 @@ def describe(req: dict[str, Any]) -> str:
     return "\n".join(lines + [f"  otros campos: {', '.join(extras)}"])
 
 
-def create_app(cfg: Config, debug: bool = False, **transports: Any) -> FastAPI:
-    pair = Pair(cfg, **transports)
+def create_app(cfg: Config, debug: bool = False, echo: bool = False, **transports: Any) -> FastAPI:
+    pair = Pair(cfg, echo=echo, **transports)
 
     def inspect(endpoint: str, req: dict[str, Any]) -> None:
         if not debug:

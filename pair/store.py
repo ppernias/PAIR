@@ -36,7 +36,8 @@ CREATE TABLE IF NOT EXISTS bench (
 
 
 class Store:
-    def __init__(self, path: str, price_in: float, price_out: float, capture_prompts: bool = True):
+    def __init__(self, path: str, price_in: float, price_out: float, capture_prompts: bool = True,
+                 echo: bool = False):
         p = Path(path).expanduser()
         p.parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(p, check_same_thread=False)
@@ -44,6 +45,7 @@ class Store:
         self.price_in = price_in
         self.price_out = price_out
         self.capture_prompts = capture_prompts
+        self.echo = echo                 # imprime cada petición en el Terminal (pair serve)
 
     def cloud_cost(self, prompt_tokens: int, completion_tokens: int) -> float:
         return (prompt_tokens * self.price_in + completion_tokens * self.price_out) / 1_000_000
@@ -84,6 +86,10 @@ class Store:
         if self.capture_prompts and prompt and not sensitive and not error:
             self.db.execute("INSERT INTO bench (request_id, prompt) VALUES (?, ?)", (rid, prompt))
         self.db.commit()
+        if self.echo:
+            from .consola import linea
+            print(linea(time.strftime("%H:%M:%S"), endpoint, target, reason, model, prompt_tokens,
+                        completion_tokens, latency_ms, fell_back, error), flush=True)
         return rid
 
     def stats(self, days: float = 30) -> dict[str, Any]:

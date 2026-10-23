@@ -35,7 +35,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Aviso: no hay clave en la variable {cfg.cloud.api_key_env} ni en el llavero (servicio PAIR);"
                   " las peticiones a la nube fallarán.", file=sys.stderr)
         print(f"PAIR escuchando en http://{cfg.host}:{cfg.port}  (modo {cfg.mode})")
-        uvicorn.run(create_app(cfg, debug=args.debug), host=cfg.host, port=cfg.port, log_level="warning")
+        uvicorn.run(create_app(cfg, debug=args.debug, echo=True), host=cfg.host, port=cfg.port, log_level="warning")
         return 0
 
     from .store import Store
@@ -49,11 +49,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  Coste real: {s['cost_usd']:.4f} USD · todo a la nube: {s['all_cloud_usd']:.4f} USD")
         print(f"  Ahorro: {s['saved_usd']:.4f} USD ({s['saved_pct']}%)")
     elif args.command == "log":
+        from .consola import linea
+
         for row in store.recent(args.n):
-            when, endpoint, target, reason, model, pt, ct, ms, fb, err = row
-            flag = " ↺" if fb else ""
-            tail = f"  ERROR {err[:60]}" if err else f"  {pt}+{ct} tok  {ms} ms"
-            print(f"{when}  {endpoint:<9} {target:<5}{flag}  {reason}  [{model}]{tail}")
+            print(linea(*row))
     elif args.command == "bench":
         n = store.export_bench(args.out)
         print(f"{n} peticiones exportadas a {args.out}. Rellena la columna 'etiqueta' con local o cloud.")
