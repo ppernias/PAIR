@@ -92,7 +92,7 @@ class ImageService:
     async def _generate_local(self, req: dict[str, Any]) -> list[str]:
         if not self._local:
             raise ImageError(None, "no hay generador local configurado")
-        body: dict[str, Any] = {"prompt": req["prompt"]}
+        body: dict[str, Any] = {"prompt": req["prompt"], "referencias": []}
         if size := _size(req.get("size")):
             body["ancho"], body["alto"] = size
         out = []
