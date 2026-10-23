@@ -25,6 +25,16 @@ Cada respuesta lleva las cabeceras `X-PAIR-Route` (destino y motivo) y `X-PAIR-M
 
 ## Instalación
 
+En macOS, un solo comando:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ppernias/PAIR/main/install.sh | bash
+```
+
+El instalador descarga PAIR en `~/PAIR`, pregunta en qué equipo corre LM Studio (puede ser otro Mac de tu red, con *Serve on Local Network* activado), comprueba que responde, crea `config.yaml` y guarda tu clave de OpenAI en el llavero de macOS.
+
+Instalación manual:
+
 ```bash
 git clone https://github.com/ppernias/pair.git
 cd pair
@@ -53,7 +63,7 @@ Apunta tus clientes a PAIR cambiando su URL base:
 | Claude Code | `export ANTHROPIC_BASE_URL=http://127.0.0.1:8787` |
 | Clientes de Gemini que permitan cambiar la URL base | `http://127.0.0.1:8787` |
 
-PAIR ignora la clave de API que envíe el cliente: usa siempre la de `OPENAI_API_KEY`.
+PAIR ignora la clave de API que envíe el cliente: usa siempre la suya, que busca en la variable `OPENAI_API_KEY` y, si no está, en el llavero de macOS (servicio `PAIR`).
 
 ## Fase 0: qué medir
 

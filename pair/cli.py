@@ -30,8 +30,8 @@ def main(argv: list[str] | None = None) -> int:
         from .app import create_app
 
         if not cfg.cloud.api_key:
-            print(f"Aviso: la variable {cfg.cloud.api_key_env} está vacía; las peticiones a la nube fallarán.",
-                  file=sys.stderr)
+            print(f"Aviso: no hay clave en la variable {cfg.cloud.api_key_env} ni en el llavero (servicio PAIR);"
+                  " las peticiones a la nube fallarán.", file=sys.stderr)
         print(f"PAIR escuchando en http://{cfg.host}:{cfg.port}  (modo {cfg.mode})")
         uvicorn.run(create_app(cfg), host=cfg.host, port=cfg.port, log_level="warning")
         return 0

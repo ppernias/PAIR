@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -23,7 +25,22 @@ class Backend:
 
     @property
     def api_key(self) -> str:
-        return os.environ.get(self.api_key_env, "") if self.api_key_env else ""
+        """La clave se busca en la variable de entorno y, si no está, en el llavero de macOS."""
+        if not self.api_key_env:
+            return ""
+        return os.environ.get(self.api_key_env, "") or _keychain(self.api_key_env)
+
+
+def _keychain(account: str) -> str:
+    """Lee una clave guardada con: security add-generic-password -s PAIR -a <account> -w <clave>"""
+    if sys.platform != "darwin":
+        return ""
+    try:
+        out = subprocess.run(["security", "find-generic-password", "-s", "PAIR", "-a", account, "-w"],
+                             capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return out.stdout.strip() if out.returncode == 0 else ""
 
 
 @dataclass
