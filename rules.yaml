@@ -19,7 +19,7 @@ sensitive_patterns:
 
 # 3. Capacidades que el modelo local no cubre: van a la nube.
 force_cloud_if:
-  images: true          # la petición incluye imágenes
+  images: false         # true si tu modelo local no entiende imágenes (Gemma 4 sí las entiende)
   over_local_context: true
 
 # 4. Palabras clave del último mensaje del usuario (sin distinguir mayúsculas).

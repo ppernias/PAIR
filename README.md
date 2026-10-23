@@ -14,10 +14,10 @@ Esta es la **fase 0 (prueba de concepto)**: proxy en Python, reglas en YAML y re
 - **Enrutado por reglas** (`rules.yaml`), en este orden:
   1. Contenido sensible (DNI, NIE, IBAN…) → siempre local. Si el local está caído, la petición falla en vez de salir.
   2. Etiquetas `@local` o `@frontera` en tu mensaje (se quitan antes de enviarlo).
-  3. Imágenes adjuntas, o una conversación que no cabe en el modelo local → nube. PAIR lee de LM Studio el contexto real del modelo cargado.
+  3. Una conversación que no cabe en el modelo local → nube (y las imágenes adjuntas, si `force_cloud_if.images` está a `true` porque tu modelo local no las entiende). PAIR lee de LM Studio el contexto real del modelo cargado.
   4. Palabras clave (resume, traduce… → local; diseña, depura… → nube).
   5. Modo: `ahorro` (local), `equilibrado` (local si tu último mensaje es corto; el historial no cuenta) o `calidad` (nube).
-- **Generación de imágenes**: por defecto con tu generador local (`images.local_url`); con `@frontera`, en modo calidad o si el local falla, con OpenAI. Desde un chat, escribe `@imagen` y la descripción: la imagen llega como respuesta en la propia conversación. En los clientes con generador de imágenes aparece como el modelo `pair-image`.
+- **Generación de imágenes**: por defecto con tu generador local (`images.local_url`); con `@frontera`, en modo calidad o si el local falla, con OpenAI. Desde un chat, escribe `@imagen` y la descripción: la imagen llega como respuesta en la propia conversación, y en los mensajes siguientes PAIR adjunta la última imagen generada para que el modelo la vea ("descríbela", "¿qué le cambiarías?"). En los clientes con generador de imágenes aparece como el modelo `pair-image`.
 - **Fallback**: si el backend elegido no responde, prueba con el otro (salvo contenido sensible).
 - **Streaming y herramientas** (tool calls) en los tres formatos.
 - **Registro** de cada decisión con su motivo, tokens, coste y ahorro.

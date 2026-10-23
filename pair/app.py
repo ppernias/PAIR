@@ -132,6 +132,32 @@ def _drop_embedded_images(req: dict[str, Any]) -> None:
 
 
 IMAGES_DIR = Path("~/.pair/images").expanduser()
+_GENERATED_LINK = re.compile(r"!\[[^\]]*\]\(https?://[^)\s]+/imagenes/([\w.-]+\.png)\)")
+
+
+def _attach_last_generated_image(req: dict[str, Any]) -> None:
+    """Si en la conversación hay imágenes que generó PAIR, adjunta la más reciente al último
+    mensaje del usuario, para que el modelo la vea de verdad (en el historial solo hay un enlace).
+
+    Así "descríbela" o "¿qué le cambiarías?" se responden mirando la imagen y no imaginándola.
+    """
+    messages = req.get("messages", [])
+    if not messages or messages[-1].get("role") != "user":
+        return
+    last = messages[-1]
+    content = last.get("content")
+    if isinstance(content, list) and any(isinstance(p, dict) and p.get("type") == "image_url" for p in content):
+        return                                       # ya trae sus propias imágenes
+    for m in reversed(messages[:-1]):
+        if m.get("role") != "assistant" or not isinstance(m.get("content"), str):
+            continue
+        names = _GENERATED_LINK.findall(m["content"])
+        path = IMAGES_DIR / names[-1] if names else None
+        if path and path.is_file():
+            b64 = base64.b64encode(path.read_bytes()).decode()
+            parts = content if isinstance(content, list) else [{"type": "text", "text": content or ""}]
+            last["content"] = parts + [{"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}}]
+            return
 
 
 def _save_image(b64: str) -> str:
@@ -221,6 +247,7 @@ def create_app(cfg: Config, debug: bool = False, **transports: Any) -> FastAPI:
         image_tags = (cfg.rules.get("tags", {}) or {}).get("image", ["@imagen", "@image"])
         if "image" in str(req.get("model", "")).lower() or strip_tags(req, image_tags):
             return await image_in_chat(req, bool(req.get("stream")), str(request.base_url))
+        _attach_last_generated_image(req)
         return await handle("openai", req, bool(req.get("stream")),
                             lambda resp, model: resp,
                             lambda chunks, stats: tr.openai_stream_passthrough(chunks, stats))

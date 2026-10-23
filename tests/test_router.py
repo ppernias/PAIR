@@ -34,11 +34,14 @@ def test_keyword_needs_whole_word():
     assert d.target == CLOUD and d.reason == "modo calidad"
 
 
-def test_images_force_cloud():
-    r = {"messages": [{"role": "user", "content": [
-        {"type": "text", "text": "resume la imagen"},
+def test_images_rule():
+    r = lambda: {"messages": [{"role": "user", "content": [
+        {"type": "text", "text": "describe la imagen"},
         {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAA"}}]}]}
-    assert decide(r, RULES, "ahorro").target == CLOUD
+    # por defecto el modelo local ve imágenes; con images: true van a la nube
+    assert decide(r(), RULES, "ahorro").target == LOCAL
+    con_regla = {**RULES, "force_cloud_if": {**RULES["force_cloud_if"], "images": True}}
+    assert decide(r(), con_regla, "ahorro").target == CLOUD
 
 
 def test_context_too_big_goes_cloud():

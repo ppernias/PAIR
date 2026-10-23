@@ -271,3 +271,15 @@ def test_embedded_images_dropped_from_any_message(make_client):
 def test_image_file_name_is_validated(make_client):
     client, _, _ = make_client()
     assert client.get("/imagenes/..%2Fpair.db").status_code == 404
+
+
+def test_last_generated_image_is_attached_for_the_model(make_client):
+    client, local, _ = make_client()
+    r = client.post("/v1/chat/completions", json={"messages": [{"role": "user", "content": "@imagen un faro"}]})
+    link = r.json()["choices"][0]["message"]["content"]
+    client.post("/v1/chat/completions", json={"messages": [
+        {"role": "user", "content": "@imagen un faro"}, {"role": "assistant", "content": link},
+        {"role": "user", "content": "Descríbeme esa imagen"}]})
+    parts = local.requests[-1]["messages"][-1]["content"]
+    assert parts[0] == {"type": "text", "text": "Descríbeme esa imagen"}
+    assert parts[1]["image_url"]["url"] == "data:image/png;base64,UE5HTE9DQUw="
