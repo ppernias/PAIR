@@ -44,6 +44,14 @@ def _keychain(account: str) -> str:
 
 
 @dataclass
+class Images:
+    local_url: str = ""                 # generador local (servicio FLUX del Mac Studio); vacío = solo nube
+    cloud_model: str = "gpt-image-1"
+    cloud_price_per_image: float = 0.0
+    timeout_s: float = 300
+
+
+@dataclass
 class Config:
     host: str = "127.0.0.1"
     port: int = 8787
@@ -53,6 +61,7 @@ class Config:
     log_path: str = "~/.pair/pair.db"
     capture_prompts: bool = True
     rules: dict[str, Any] = field(default_factory=dict)
+    images: Images = field(default_factory=Images)
 
 
 MODES = ("ahorro", "equilibrado", "calidad")
@@ -89,4 +98,5 @@ def load(config_path: str | Path = "config.yaml") -> Config:
         log_path=log.get("path", base.log_path),
         capture_prompts=bool(log.get("capture_prompts", base.capture_prompts)),
         rules=rules or {},
+        images=Images(**{k: v for k, v in (data.get("images") or {}).items() if k in Images.__dataclass_fields__}),
     )

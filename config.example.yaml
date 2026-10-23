@@ -9,20 +9,28 @@ mode: equilibrado        # ahorro | equilibrado | calidad
 local:
   name: lmstudio
   base_url: http://localhost:1234/v1   # servidor de LM Studio
-  model: ""                            # vacío = el primer modelo cargado en LM Studio
-  max_context_tokens: 16000            # por encima, la petición va a la nube
-  timeout_s: 120
+  model: ""                            # vacío = el modelo que esté cargado en LM Studio
+  # PAIR lee de LM Studio el contexto real del modelo cargado. Este valor solo se
+  # usa si no puede leerlo (otro servidor local, o LM Studio sin responder).
+  max_context_tokens: 16000
+  timeout_s: 600                       # los modelos que razonan pueden tardar varios minutos
 
 cloud:
   name: openai
   base_url: https://api.openai.com/v1
   model: gpt-5                         # modelo de frontera de referencia
-  api_key_env: OPENAI_API_KEY          # la clave se lee de esta variable de entorno
+  api_key_env: OPENAI_API_KEY          # la clave se lee de esta variable o del llavero de macOS
   timeout_s: 300
   # Precio en USD por millón de tokens. Compruébalo en https://openai.com/api/pricing
   # antes de fiarte del cálculo de ahorro.
   price_input_per_mtok: 1.25
   price_output_per_mtok: 10.0
+
+images:
+  local_url: ""                        # generador local, p. ej. http://192.168.1.230:8770; vacío = solo nube
+  cloud_model: gpt-image-1
+  cloud_price_per_image: 0.04          # USD por imagen; compruébalo en la página de precios
+  timeout_s: 300
 
 log:
   path: ~/.pair/pair.db

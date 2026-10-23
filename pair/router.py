@@ -162,9 +162,15 @@ def decide(req: dict[str, Any], rules: dict[str, Any], mode: str, local_max_cont
         return Decision(LOCAL, f"modo {mode}")
     if default == CLOUD:
         return Decision(CLOUD, f"modo {mode}")
-    if isinstance(default, dict) and "local_if_prompt_tokens_below" in default:
-        limit = int(default["local_if_prompt_tokens_below"])
-        if tokens < limit:
-            return Decision(LOCAL, f"modo {mode}: ~{tokens} tokens < {limit}")
-        return Decision(CLOUD, f"modo {mode}: ~{tokens} tokens >= {limit}")
+    if isinstance(default, dict):
+        # La dificultad se mide solo con el último mensaje del usuario: el historial,
+        # el prompt de sistema y las herramientas no hacen más difícil la tarea
+        # (si no caben en el modelo local, ya lo ha decidido la regla 3).
+        limit = default.get("local_if_last_message_tokens_below", default.get("local_if_prompt_tokens_below"))
+        if limit is not None:
+            limit = int(limit)
+            last = len(text) // 4
+            if last < limit:
+                return Decision(LOCAL, f"modo {mode}: último mensaje ~{last} tokens < {limit}")
+            return Decision(CLOUD, f"modo {mode}: último mensaje ~{last} tokens >= {limit}")
     return Decision(CLOUD, "sin regla aplicable")

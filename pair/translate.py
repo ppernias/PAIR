@@ -37,12 +37,15 @@ class StreamStats:
         self.prompt_tokens: int | None = None
         self.completion_tokens: int | None = None
         self.chars = 0
+        self.reasoning_tokens = 0
 
     def see(self, chunk: dict[str, Any]) -> None:
         usage = chunk.get("usage")
         if usage:
             self.prompt_tokens = usage.get("prompt_tokens", self.prompt_tokens)
             self.completion_tokens = usage.get("completion_tokens", self.completion_tokens)
+            details = usage.get("completion_tokens_details") or {}
+            self.reasoning_tokens = details.get("reasoning_tokens") or self.reasoning_tokens
         for choice in chunk.get("choices", []) or []:
             delta = choice.get("delta") or {}
             self.chars += len(delta.get("content") or "")

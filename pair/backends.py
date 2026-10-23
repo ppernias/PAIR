@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -45,15 +46,40 @@ class Client:
             timeout=httpx.Timeout(backend.timeout_s, connect=5.0),
             transport=transport,
         )
-        self._model: str | None = backend.model or None
+        root = backend.base_url.rstrip("/")
+        self._lms_url = (root[:-3] if root.endswith("/v1") else root) + "/api/v0/models"
+        self._lms_cache: tuple[float, list[dict[str, Any]] | None] = (0.0, None)
 
     async def close(self) -> None:
         await self._http.aclose()
 
+    async def _lmstudio(self) -> list[dict[str, Any]] | None:
+        """Estado de los modelos según la API propia de LM Studio (None si no es LM Studio).
+
+        Se consulta como mucho cada 30 s, para notar cambios hechos en LM Studio sin
+        añadir latencia a cada petición.
+        """
+        if self.is_cloud:
+            return None
+        ts, data = self._lms_cache
+        if time.monotonic() - ts < 30:
+            return data
+        try:
+            r = await self._http.get(self._lms_url, timeout=3.0)
+            data = r.json().get("data") if r.status_code == 200 else None
+        except (httpx.HTTPError, ValueError):
+            data = None
+        self._lms_cache = (time.monotonic(), data)
+        return data
+
     async def model(self) -> str:
-        """Modelo a usar; si no está configurado, el primero que ofrezca el servidor."""
-        if self._model:
-            return self._model
+        """Modelo a usar: el configurado; si no hay, el que esté cargado en LM Studio,
+        y si no se sabe, el primero que ofrezca el servidor."""
+        if self.backend.model:
+            return self.backend.model
+        for m in await self._lmstudio() or []:
+            if m.get("state") == "loaded" and m.get("type") != "embeddings":
+                return m["id"]
         try:
             r = await self._http.get("/models")
             r.raise_for_status()
@@ -62,8 +88,19 @@ class Client:
             raise BackendError(self.backend.name, None, f"no responde: {e}") from e
         if not models:
             raise BackendError(self.backend.name, None, "no hay ningún modelo cargado")
-        self._model = models[0]
-        return self._model
+        return models[0]
+
+    async def context_tokens(self) -> int:
+        """Contexto útil del modelo local: el que tiene cargado LM Studio (con un 10 % de
+        margen para la respuesta) o, si no se puede saber, `max_context_tokens`."""
+        try:
+            model = await self.model()
+        except BackendError:
+            return self.backend.max_context_tokens
+        for m in await self._lmstudio() or []:
+            if m.get("id") == model and m.get("loaded_context_length"):
+                return int(m["loaded_context_length"] * 0.9)
+        return self.backend.max_context_tokens
 
     def _prepare(self, req: dict[str, Any], model: str, stream: bool) -> dict[str, Any]:
         body = {k: v for k, v in req.items() if not k.startswith("_")}

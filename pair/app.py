@@ -18,6 +18,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from . import translate as tr
 from .backends import BackendError, Client
 from .config import Config
+from .images import ImageError, to_openai as images_to_openai, ImageService
 from .router import CLOUD, LOCAL, Decision, decide, estimate_tokens, last_user_text
 from .store import Store
 
@@ -26,8 +27,10 @@ class Pair:
     """Decide, llama al backend (con fallback) y registra."""
 
     def __init__(self, cfg: Config, local_transport: httpx.AsyncBaseTransport | None = None,
-                 cloud_transport: httpx.AsyncBaseTransport | None = None):
+                 cloud_transport: httpx.AsyncBaseTransport | None = None,
+                 image_transport: httpx.AsyncBaseTransport | None = None):
         self.cfg = cfg
+        self.images = ImageService(cfg.images, cfg.cloud, cfg.rules, cfg.mode, image_transport, cloud_transport)
         self.clients = {
             LOCAL: Client(cfg.local, local_transport),
             CLOUD: Client(cfg.cloud, cloud_transport, is_cloud=True),
@@ -38,10 +41,12 @@ class Pair:
     async def close(self) -> None:
         for c in self.clients.values():
             await c.close()
+        await self.images.close()
 
-    def route(self, req: dict[str, Any]) -> tuple[Decision, list[str], str]:
+    async def route(self, req: dict[str, Any]) -> tuple[Decision, list[str], str]:
         prompt = last_user_text(req)          # antes de quitar etiquetas
-        decision = decide(req, self.cfg.rules, self.cfg.mode, self.cfg.local.max_context_tokens)
+        context = await self.clients[LOCAL].context_tokens()
+        decision = decide(req, self.cfg.rules, self.cfg.mode, context)
         other = CLOUD if decision.target == LOCAL else LOCAL
         order = [decision.target] if decision.sensitive else [decision.target, other]
         return decision, order, prompt
@@ -52,7 +57,7 @@ class Pair:
         `resultado` es un dict (sin stream) o un iterador de chunks (con stream).
         """
         t0 = time.monotonic()
-        decision, order, prompt = self.route(req)
+        decision, order, prompt = await self.route(req)
         last_error: BackendError | None = None
         for i, target in enumerate(order):
             client = self.clients[target]
@@ -74,13 +79,14 @@ class Pair:
 
     def log(self, endpoint: str, req: dict[str, Any], decision: Decision, target: str, model: str,
             fell_back: bool, stream: bool, prompt: str, t0: float,
-            prompt_tokens: int | None, completion_tokens: int | None, completion_chars: int = 0) -> None:
+            prompt_tokens: int | None, completion_tokens: int | None, completion_chars: int = 0,
+            reasoning_tokens: int = 0) -> None:
         self.store.record(
             endpoint=endpoint, target=target, decided=decision.target, reason=decision.reason, model=model,
             sensitive=decision.sensitive, fell_back=fell_back, stream=stream,
             prompt_tokens=prompt_tokens if prompt_tokens is not None else estimate_tokens(req),
             completion_tokens=completion_tokens if completion_tokens is not None else completion_chars // 4,
-            latency_ms=int((time.monotonic() - t0) * 1000), prompt=prompt,
+            latency_ms=int((time.monotonic() - t0) * 1000), prompt=prompt, reasoning_tokens=reasoning_tokens,
         )
 
 
@@ -155,7 +161,8 @@ def create_app(cfg: Config, debug: bool = False, **transports: Any) -> FastAPI:
             usage = result.get("usage") or {}
             pair.log(endpoint, canonical, decision, target, model, fell_back, False, prompt, t0,
                      usage.get("prompt_tokens"), usage.get("completion_tokens"),
-                     len(((result.get("choices") or [{}])[0].get("message") or {}).get("content") or ""))
+                     len(((result.get("choices") or [{}])[0].get("message") or {}).get("content") or ""),
+                     (usage.get("completion_tokens_details") or {}).get("reasoning_tokens") or 0)
             return JSONResponse(to_response(result, model), headers=headers)
 
         stats = tr.StreamStats()
@@ -166,7 +173,7 @@ def create_app(cfg: Config, debug: bool = False, **transports: Any) -> FastAPI:
                     yield piece
             finally:
                 pair.log(endpoint, canonical, decision, target, model, fell_back, True, prompt, t0,
-                         stats.prompt_tokens, stats.completion_tokens, stats.chars)
+                         stats.prompt_tokens, stats.completion_tokens, stats.chars, stats.reasoning_tokens)
 
         return StreamingResponse(body(), media_type="text/event-stream", headers=headers)
 
@@ -181,7 +188,30 @@ def create_app(cfg: Config, debug: bool = False, **transports: Any) -> FastAPI:
 
     @app.get("/v1/models")
     async def models():
-        return {"object": "list", "data": [{"id": "pair", "object": "model", "owned_by": "pair"}]}
+        return {"object": "list", "data": [{"id": "pair", "object": "model", "owned_by": "pair"},
+                                           {"id": "pair-image", "object": "model", "owned_by": "pair"}]}
+
+    # ------------------------------------------------------------ Imágenes (formato OpenAI)
+    @app.post("/v1/images/generations")
+    async def images(request: Request):
+        req = await request.json()
+        inspect("images", req)
+        t0 = time.monotonic()
+        try:
+            result = await pair.images.generate(req)
+        except ImageError as e:
+            pair.store.record(endpoint="images", target="local", decided="local", reason="error", model=None,
+                              sensitive=False, fell_back=False, stream=False, prompt_tokens=0, completion_tokens=0,
+                              latency_ms=int((time.monotonic() - t0) * 1000), error=e.detail, cloud_cost=0.0)
+            status = e.status if e.status and 400 <= e.status < 500 else 502
+            return JSONResponse({"error": {"message": f"PAIR no pudo generar la imagen: {e.detail}",
+                                           "type": "pair_backend_error"}}, status_code=status)
+        pair.store.record(endpoint="images", target=result.target, decided=result.decision.target,
+                          reason=result.decision.reason, model=result.model, sensitive=result.decision.sensitive,
+                          fell_back=result.fell_back, stream=False, prompt_tokens=0, completion_tokens=0,
+                          latency_ms=int((time.monotonic() - t0) * 1000), cloud_cost=result.cloud_cost)
+        return JSONResponse(images_to_openai(result, req.get("response_format")),
+                            headers=_route_header(result.decision, result.target, result.model, result.fell_back))
 
     # ------------------------------------------------------------ Anthropic
     @app.post("/v1/messages")

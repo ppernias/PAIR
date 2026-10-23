@@ -10,16 +10,20 @@ Esta es la **fase 0 (prueba de concepto)**: proxy en Python, reglas en YAML y re
   - OpenAI: `POST /v1/chat/completions`
   - Anthropic: `POST /v1/messages` (y `/v1/messages/count_tokens`)
   - Gemini: `POST /v1beta/models/{modelo}:generateContent` y `:streamGenerateContent`
+  - Imágenes (formato OpenAI): `POST /v1/images/generations`
 - **Enrutado por reglas** (`rules.yaml`), en este orden:
   1. Contenido sensible (DNI, NIE, IBAN…) → siempre local. Si el local está caído, la petición falla en vez de salir.
   2. Etiquetas `@local` o `@frontera` en tu mensaje (se quitan antes de enviarlo).
-  3. Imágenes o contexto mayor que el del modelo local → nube.
+  3. Imágenes adjuntas, o una conversación que no cabe en el modelo local → nube. PAIR lee de LM Studio el contexto real del modelo cargado.
   4. Palabras clave (resume, traduce… → local; diseña, depura… → nube).
-  5. Modo: `ahorro` (local), `equilibrado` (local si el prompt es corto) o `calidad` (nube).
+  5. Modo: `ahorro` (local), `equilibrado` (local si tu último mensaje es corto; el historial no cuenta) o `calidad` (nube).
+- **Generación de imágenes**: por defecto con tu generador local (`images.local_url`); con `@frontera`, en modo calidad o si el local falla, con OpenAI. En los clientes aparece como el modelo `pair-image`.
 - **Fallback**: si el backend elegido no responde, prueba con el otro (salvo contenido sensible).
 - **Streaming y herramientas** (tool calls) en los tres formatos.
 - **Registro** de cada decisión con su motivo, tokens, coste y ahorro.
 - **Banco de pruebas**: guarda el último mensaje de cada petición no sensible para que puedas etiquetarlo después.
+
+El ahorro se calcula con lo que habría costado la respuesta visible en la nube; el razonamiento interno de los modelos locales no cuenta.
 
 Cada respuesta lleva las cabeceras `X-PAIR-Route` (destino y motivo) y `X-PAIR-Model`.
 

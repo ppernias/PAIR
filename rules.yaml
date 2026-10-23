@@ -45,10 +45,12 @@ keywords:
     - razona paso a paso
     - por qué falla
 
-# 5. Si nada de lo anterior decide, cuenta la longitud del prompt (en tokens aprox.)
-#    y el modo activo.
+# 5. Si nada de lo anterior decide, manda el modo activo.
+#    En equilibrado cuenta solo tu último mensaje (con lo que pegues o adjuntes en él),
+#    no el historial ni el prompt de sistema del cliente: un "gracias" al final de una
+#    conversación larga sigue siendo una tarea sencilla.
 default_by_mode:
   ahorro: local
   equilibrado:
-    local_if_prompt_tokens_below: 1500
+    local_if_last_message_tokens_below: 4000
   calidad: cloud

@@ -64,8 +64,14 @@ class Store:
         latency_ms: int,
         prompt: str = "",
         error: str | None = None,
+        reasoning_tokens: int = 0,
+        cloud_cost: float | None = None,
     ) -> int:
-        cloud_cost = self.cloud_cost(prompt_tokens, completion_tokens)
+        if cloud_cost is None:
+            # Lo que habría costado en la nube. Si respondió el local, no se cuenta su
+            # razonamiento interno: el modelo de la nube habría razonado a su manera.
+            visible = completion_tokens - reasoning_tokens if target == "local" else completion_tokens
+            cloud_cost = self.cloud_cost(prompt_tokens, max(visible, 0))
         cost = cloud_cost if target == "cloud" else 0.0
         cur = self.db.execute(
             "INSERT INTO requests (ts, endpoint, target, decided, reason, model, sensitive, fell_back, stream,"

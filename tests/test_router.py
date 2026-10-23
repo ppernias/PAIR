@@ -68,3 +68,24 @@ def test_base64_is_not_counted_as_text():
     r = {"messages": [{"role": "user", "content": [
         {"type": "file", "file": {"file_data": "data:application/pdf;base64," + "A" * 40000}}]}]}
     assert estimate_tokens(r) < 10
+
+
+def test_balanced_mode_ignores_history_and_system_prompt():
+    r = {"messages": [
+        {"role": "system", "content": "instrucciones " * 2000},
+        {"role": "user", "content": "documento " * 3000},
+        {"role": "assistant", "content": "respuesta " * 500},
+        {"role": "user", "content": "gracias"},
+    ]}
+    d = decide(r, RULES, "equilibrado", local_max_context=128000)
+    assert d.target == LOCAL and "último mensaje" in d.reason
+
+
+def test_agent_round_uses_original_user_message():
+    r = {"messages": [
+        {"role": "user", "content": "qué hay en la carpeta"},
+        {"role": "assistant", "content": None, "tool_calls": [{"id": "1", "type": "function",
+                                                               "function": {"name": "ls", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "1", "content": "a.txt\nb.txt"},
+    ]}
+    assert decide(r, RULES, "equilibrado").target == LOCAL

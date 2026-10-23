@@ -1,3 +1,4 @@
+import httpx
 import json
 
 from .conftest import FakeBackend
@@ -151,3 +152,78 @@ def test_describe_request_structure():
         {"role": "user", "content": [{"type": "text", "text": "hola"}, {"type": "file", "file": {"content": "abc"}}]}]})
     assert "system: texto(9)" in out
     assert "file['file']" in out and "otros campos: model, stream" in out
+
+
+# ------------------------------------------------------------------ imágenes
+
+def test_image_local_by_default(make_client):
+    client, _, cloud = make_client()
+    r = client.post("/v1/images/generations", json={"model": "pair-image", "prompt": "un faro al atardecer",
+                                                    "size": "1536x1024"})
+    assert r.status_code == 200 and r.headers["x-pair-route"].startswith("local")
+    assert r.json()["data"][0]["b64_json"] == "UE5HTE9DQUw="     # b"PNGLOCAL"
+    assert client.flux.requests[0] == {"prompt": "un faro al atardecer", "ancho": 1536, "alto": 1024}
+    assert not cloud.requests
+
+
+def test_image_cloud_tag_and_cost(make_client):
+    client, _, cloud = make_client()
+    r = client.post("/v1/images/generations", json={"prompt": "@frontera un faro", "n": 1})
+    assert r.headers["x-pair-route"].startswith("cloud")
+    assert cloud.requests[0] == {"prompt": "un faro", "n": 1, "model": "gpt-image-test"}
+    s = client.get("/pair/stats").json()
+    assert s["cost_usd"] == 0.04
+
+
+def test_image_falls_back_to_cloud_when_local_down(make_client):
+    from .conftest import FakeFlux
+    client, _, cloud = make_client(flux=FakeFlux(down=True))
+    r = client.post("/v1/images/generations", json={"prompt": "un faro", "response_format": "url"})
+    assert r.status_code == 200 and "fallback" in r.headers["x-pair-route"]
+    assert r.json()["data"][0]["url"].startswith("data:image/png;base64,")
+
+
+def test_models_include_image_model(make_client):
+    client, _, _ = make_client()
+    assert {m["id"] for m in client.get("/v1/models").json()["data"]} == {"pair", "pair-image"}
+
+
+# ------------------------------------------------------------------ contexto real de LM Studio
+
+def test_context_and_model_from_lmstudio(make_client):
+    from .conftest import FakeBackend
+
+    class LMStudio(FakeBackend):
+        def handler(self, request):
+            if request.url.path == "/api/v0/models":
+                return httpx.Response(200, json={"data": [
+                    {"id": "gemma", "type": "llm", "state": "not-loaded", "max_context_length": 262144},
+                    {"id": "glm-4.7", "type": "llm", "state": "loaded", "loaded_context_length": 8192}]})
+            return super().handler(request)
+
+    client, local, _ = make_client(local=LMStudio("local", "ignorado"), mode="ahorro")
+    # ~10.000 tokens no caben en 8192 * 0,9 → nube, aunque el modo sea ahorro
+    r = client.post("/v1/chat/completions", json={"messages": [{"role": "user", "content": "x " * 20000}]})
+    assert r.headers["x-pair-route"].startswith("cloud") and "supera el local" in r.headers["x-pair-route"]
+    r = client.post("/v1/chat/completions", json={"messages": [{"role": "user", "content": "hola"}]})
+    assert r.headers["x-pair-model"] == "glm-4.7" and local.requests[0]["model"] == "glm-4.7"
+
+
+def test_local_reasoning_not_counted_as_savings(make_client):
+    from .conftest import FakeBackend
+
+    class Thinker(FakeBackend):
+        def handler(self, request):
+            r = super().handler(request)
+            if request.url.path.endswith("/chat/completions"):
+                body = r.json()
+                body["usage"] = {"prompt_tokens": 100, "completion_tokens": 1050,
+                                 "completion_tokens_details": {"reasoning_tokens": 1000}}
+                return httpx.Response(200, json=body)
+            return r
+
+    client, _, _ = make_client(local=Thinker("local", "glm"))
+    client.post("/v1/chat/completions", json={"messages": [{"role": "user", "content": "resume esto"}]})
+    s = client.get("/pair/stats").json()
+    # 100 entrada a 1 USD/M + 50 visibles a 10 USD/M = 0.0006, no 0.0106
+    assert s["all_cloud_usd"] == 0.0006
