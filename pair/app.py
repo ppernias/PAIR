@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import copy
+import base64
 import json
 import re
+import uuid
 import time
 import unicodedata
 from collections.abc import AsyncIterator, Callable
@@ -14,7 +16,7 @@ from typing import Any
 
 import httpx
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from . import translate as tr
 from .backends import BackendError, Client
@@ -113,14 +115,31 @@ _EMBEDDED_IMAGE = re.compile(r"!\[[^\]]*\]\(data:image/[^)]+\)")
 
 
 def _drop_embedded_images(req: dict[str, Any]) -> None:
-    """Quita del historial las imágenes que PAIR devolvió incrustadas en el chat.
+    """Quita de los mensajes las imágenes incrustadas como texto en base64.
 
-    El cliente las reenvía en cada mensaje; son megas de base64 que ningún modelo
-    necesita leer y que dispararían el tamaño (y el coste) de la conversación.
+    Un cliente puede reenviarlas en el historial o en peticiones auxiliares (como la
+    del título de la conversación); son megas que ningún modelo necesita leer y que
+    dispararían el tamaño y el coste de la petición.
     """
     for m in req.get("messages", []):
-        if m.get("role") == "assistant" and isinstance(m.get("content"), str) and "data:image/" in m["content"]:
-            m["content"] = _EMBEDDED_IMAGE.sub("[imagen generada]", m["content"])
+        content = m.get("content")
+        if isinstance(content, str) and "data:image/" in content:
+            m["content"] = _EMBEDDED_IMAGE.sub("[imagen generada]", content)
+        elif isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and "data:image/" in str(part.get("text", "")):
+                    part["text"] = _EMBEDDED_IMAGE.sub("[imagen generada]", part["text"])
+
+
+IMAGES_DIR = Path("~/.pair/images").expanduser()
+
+
+def _save_image(b64: str) -> str:
+    """Guarda una imagen generada y devuelve su nombre de fichero."""
+    IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+    name = f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}.png"
+    (IMAGES_DIR / name).write_bytes(base64.b64decode(b64))
+    return name
 
 
 DEBUG_FILE = Path("~/.pair/last_request.json").expanduser()
@@ -201,7 +220,7 @@ def create_app(cfg: Config, debug: bool = False, **transports: Any) -> FastAPI:
         # Imagen pedida desde el chat: modelo de imagen (p. ej. "pair-image") o etiqueta @imagen.
         image_tags = (cfg.rules.get("tags", {}) or {}).get("image", ["@imagen", "@image"])
         if "image" in str(req.get("model", "")).lower() or strip_tags(req, image_tags):
-            return await image_in_chat(req, bool(req.get("stream")))
+            return await image_in_chat(req, bool(req.get("stream")), str(request.base_url))
         return await handle("openai", req, bool(req.get("stream")),
                             lambda resp, model: resp,
                             lambda chunks, stats: tr.openai_stream_passthrough(chunks, stats))
@@ -240,13 +259,22 @@ def create_app(cfg: Config, debug: bool = False, **transports: Any) -> FastAPI:
         return JSONResponse(images_to_openai(result, req.get("response_format")),
                             headers=_route_header(result.decision, result.target, result.model, result.fell_back))
 
-    async def image_in_chat(req: dict[str, Any], stream: bool):
-        """Genera una imagen pedida desde un chat y la devuelve como mensaje con la imagen incrustada."""
+    @app.get("/imagenes/{name}")
+    async def image_file(name: str):
+        path = IMAGES_DIR / name
+        if not re.fullmatch(r"[\w.-]+\.png", name) or not path.is_file():
+            return JSONResponse({"error": "imagen no encontrada"}, status_code=404)
+        return FileResponse(path, media_type="image/png")
+
+    async def image_in_chat(req: dict[str, Any], stream: bool, base_url: str):
+        """Genera una imagen pedida desde un chat. La guarda en ~/.pair/images y responde con
+        un enlace a ella, de modo que en la conversación solo viaja una URL corta."""
         result, error = await make_images({"prompt": last_user_text(req)})
         if error:
             content, headers = f"No he podido generar la imagen: {error.detail}", {}
         else:
-            content = "\n\n".join(f"![imagen](data:image/png;base64,{b64})" for b64 in result.images)
+            links = [f"{base_url.rstrip('/')}/imagenes/{_save_image(b64)}" for b64 in result.images]
+            content = "\n\n".join(f"![imagen]({url})" for url in links)
             headers = _route_header(result.decision, result.target, result.model, result.fell_back)
         model = req.get("model", "pair")
         if not stream:

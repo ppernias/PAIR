@@ -235,7 +235,10 @@ def test_image_from_chat_tag_stream(make_client):
         {"role": "user", "content": "hola"}, {"role": "assistant", "content": "hola"},
         {"role": "user", "content": "@imagen un faro al atardecer"}]})
     events = sse_events(r.text)
-    assert events[0][1]["choices"][0]["delta"]["content"] == "![imagen](data:image/png;base64,UE5HTE9DQUw=)"
+    content = events[0][1]["choices"][0]["delta"]["content"]
+    url = content.removeprefix("![imagen](").removesuffix(")")
+    assert url.startswith("http://testserver/imagenes/") and url.endswith(".png")
+    assert client.get(url).content == b"PNGLOCAL"
     assert client.flux.requests[0]["prompt"] == "un faro al atardecer"
     assert not local.requests and r.headers["x-pair-route"].startswith("local")
 
@@ -244,7 +247,7 @@ def test_image_from_chat_image_model(make_client):
     client, _, cloud = make_client()
     r = client.post("/v1/chat/completions", json={"model": "PAIR-image", "messages": [
         {"role": "user", "content": "@frontera un faro"}]})
-    assert r.json()["choices"][0]["message"]["content"].startswith("![imagen](data:image/png;base64,")
+    assert r.json()["choices"][0]["message"]["content"].startswith("![imagen](http://testserver/imagenes/")
     assert cloud.requests[0]["prompt"] == "un faro"
 
 
@@ -255,3 +258,16 @@ def test_generated_images_are_dropped_from_history(make_client):
         {"role": "user", "content": "@imagen un faro"}, {"role": "assistant", "content": big},
         {"role": "user", "content": "gracias"}]})
     assert local.requests[0]["messages"][1]["content"] == "[imagen generada]"
+
+
+def test_embedded_images_dropped_from_any_message(make_client):
+    client, local, _ = make_client()
+    title_request = "Pon título a esta conversación: ![imagen](data:image/png;base64," + "A" * 500000 + ")"
+    r = client.post("/v1/chat/completions", json={"messages": [{"role": "user", "content": title_request}]})
+    assert r.headers["x-pair-route"].startswith("local")
+    assert local.requests[0]["messages"][0]["content"].endswith("[imagen generada]")
+
+
+def test_image_file_name_is_validated(make_client):
+    client, _, _ = make_client()
+    assert client.get("/imagenes/..%2Fpair.db").status_code == 404
