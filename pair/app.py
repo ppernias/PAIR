@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 import time
 import unicodedata
 from collections.abc import AsyncIterator, Callable
@@ -19,7 +20,7 @@ from . import translate as tr
 from .backends import BackendError, Client
 from .config import Config
 from .images import ImageError, to_openai as images_to_openai, ImageService
-from .router import CLOUD, LOCAL, Decision, decide, estimate_tokens, last_user_text
+from .router import CLOUD, LOCAL, Decision, decide, estimate_tokens, last_user_text, strip_tags
 from .store import Store
 
 
@@ -108,6 +109,20 @@ def _error(endpoint: str, err: BackendError) -> JSONResponse:
     return JSONResponse(body, status_code=status)
 
 
+_EMBEDDED_IMAGE = re.compile(r"!\[[^\]]*\]\(data:image/[^)]+\)")
+
+
+def _drop_embedded_images(req: dict[str, Any]) -> None:
+    """Quita del historial las imágenes que PAIR devolvió incrustadas en el chat.
+
+    El cliente las reenvía en cada mensaje; son megas de base64 que ningún modelo
+    necesita leer y que dispararían el tamaño (y el coste) de la conversación.
+    """
+    for m in req.get("messages", []):
+        if m.get("role") == "assistant" and isinstance(m.get("content"), str) and "data:image/" in m["content"]:
+            m["content"] = _EMBEDDED_IMAGE.sub("[imagen generada]", m["content"])
+
+
 DEBUG_FILE = Path("~/.pair/last_request.json").expanduser()
 
 
@@ -182,6 +197,11 @@ def create_app(cfg: Config, debug: bool = False, **transports: Any) -> FastAPI:
     async def openai_chat(request: Request):
         req = await request.json()
         inspect("openai", req)
+        _drop_embedded_images(req)
+        # Imagen pedida desde el chat: modelo de imagen (p. ej. "pair-image") o etiqueta @imagen.
+        image_tags = (cfg.rules.get("tags", {}) or {}).get("image", ["@imagen", "@image"])
+        if "image" in str(req.get("model", "")).lower() or strip_tags(req, image_tags):
+            return await image_in_chat(req, bool(req.get("stream")))
         return await handle("openai", req, bool(req.get("stream")),
                             lambda resp, model: resp,
                             lambda chunks, stats: tr.openai_stream_passthrough(chunks, stats))
@@ -192,10 +212,8 @@ def create_app(cfg: Config, debug: bool = False, **transports: Any) -> FastAPI:
                                            {"id": "pair-image", "object": "model", "owned_by": "pair"}]}
 
     # ------------------------------------------------------------ Imágenes (formato OpenAI)
-    @app.post("/v1/images/generations")
-    async def images(request: Request):
-        req = await request.json()
-        inspect("images", req)
+    async def make_images(req: dict[str, Any]):
+        """Genera y registra. Devuelve (resultado, None) o (None, error)."""
         t0 = time.monotonic()
         try:
             result = await pair.images.generate(req)
@@ -203,15 +221,49 @@ def create_app(cfg: Config, debug: bool = False, **transports: Any) -> FastAPI:
             pair.store.record(endpoint="images", target="local", decided="local", reason="error", model=None,
                               sensitive=False, fell_back=False, stream=False, prompt_tokens=0, completion_tokens=0,
                               latency_ms=int((time.monotonic() - t0) * 1000), error=e.detail, cloud_cost=0.0)
-            status = e.status if e.status and 400 <= e.status < 500 else 502
-            return JSONResponse({"error": {"message": f"PAIR no pudo generar la imagen: {e.detail}",
-                                           "type": "pair_backend_error"}}, status_code=status)
+            return None, e
         pair.store.record(endpoint="images", target=result.target, decided=result.decision.target,
                           reason=result.decision.reason, model=result.model, sensitive=result.decision.sensitive,
                           fell_back=result.fell_back, stream=False, prompt_tokens=0, completion_tokens=0,
                           latency_ms=int((time.monotonic() - t0) * 1000), cloud_cost=result.cloud_cost)
+        return result, None
+
+    @app.post("/v1/images/generations")
+    async def images(request: Request):
+        req = await request.json()
+        inspect("images", req)
+        result, error = await make_images(req)
+        if error:
+            status = error.status if error.status and 400 <= error.status < 500 else 502
+            return JSONResponse({"error": {"message": f"PAIR no pudo generar la imagen: {error.detail}",
+                                           "type": "pair_backend_error"}}, status_code=status)
         return JSONResponse(images_to_openai(result, req.get("response_format")),
                             headers=_route_header(result.decision, result.target, result.model, result.fell_back))
+
+    async def image_in_chat(req: dict[str, Any], stream: bool):
+        """Genera una imagen pedida desde un chat y la devuelve como mensaje con la imagen incrustada."""
+        result, error = await make_images({"prompt": last_user_text(req)})
+        if error:
+            content, headers = f"No he podido generar la imagen: {error.detail}", {}
+        else:
+            content = "\n\n".join(f"![imagen](data:image/png;base64,{b64})" for b64 in result.images)
+            headers = _route_header(result.decision, result.target, result.model, result.fell_back)
+        model = req.get("model", "pair")
+        if not stream:
+            return JSONResponse({"id": "pair-img", "object": "chat.completion", "created": int(time.time()),
+                                 "model": model, "choices": [{"index": 0, "finish_reason": "stop",
+                                 "message": {"role": "assistant", "content": content}}],
+                                 "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}},
+                                headers=headers)
+
+        async def body() -> AsyncIterator[bytes]:
+            base = {"id": "pair-img", "object": "chat.completion.chunk", "created": int(time.time()), "model": model}
+            for delta, finish in (({"role": "assistant", "content": content}, None), ({}, "stop")):
+                chunk = {**base, "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]}
+                yield f"data: {json.dumps(chunk)}\n\n".encode()
+            yield b"data: [DONE]\n\n"
+
+        return StreamingResponse(body(), media_type="text/event-stream", headers=headers)
 
     # ------------------------------------------------------------ Anthropic
     @app.post("/v1/messages")

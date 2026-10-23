@@ -227,3 +227,31 @@ def test_local_reasoning_not_counted_as_savings(make_client):
     s = client.get("/pair/stats").json()
     # 100 entrada a 1 USD/M + 50 visibles a 10 USD/M = 0.0006, no 0.0106
     assert s["all_cloud_usd"] == 0.0006
+
+
+def test_image_from_chat_tag_stream(make_client):
+    client, local, _ = make_client()
+    r = client.post("/v1/chat/completions", json={"model": "pair", "stream": True, "messages": [
+        {"role": "user", "content": "hola"}, {"role": "assistant", "content": "hola"},
+        {"role": "user", "content": "@imagen un faro al atardecer"}]})
+    events = sse_events(r.text)
+    assert events[0][1]["choices"][0]["delta"]["content"] == "![imagen](data:image/png;base64,UE5HTE9DQUw=)"
+    assert client.flux.requests[0]["prompt"] == "un faro al atardecer"
+    assert not local.requests and r.headers["x-pair-route"].startswith("local")
+
+
+def test_image_from_chat_image_model(make_client):
+    client, _, cloud = make_client()
+    r = client.post("/v1/chat/completions", json={"model": "PAIR-image", "messages": [
+        {"role": "user", "content": "@frontera un faro"}]})
+    assert r.json()["choices"][0]["message"]["content"].startswith("![imagen](data:image/png;base64,")
+    assert cloud.requests[0]["prompt"] == "un faro"
+
+
+def test_generated_images_are_dropped_from_history(make_client):
+    client, local, _ = make_client()
+    big = "![imagen](data:image/png;base64," + "A" * 500000 + ")"
+    client.post("/v1/chat/completions", json={"messages": [
+        {"role": "user", "content": "@imagen un faro"}, {"role": "assistant", "content": big},
+        {"role": "user", "content": "gracias"}]})
+    assert local.requests[0]["messages"][1]["content"] == "[imagen generada]"

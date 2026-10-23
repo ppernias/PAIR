@@ -7,6 +7,7 @@
 tags:
   local: ["@local"]
   cloud: ["@frontera", "@cloud"]
+  image: ["@imagen", "@image"]   # genera una imagen con el mensaje como descripción
 
 # 2. Privacidad: si el texto coincide con alguno de estos patrones,
 #    la petición es sensible y NUNCA sale del equipo.

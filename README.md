@@ -17,7 +17,7 @@ Esta es la **fase 0 (prueba de concepto)**: proxy en Python, reglas en YAML y re
   3. Imágenes adjuntas, o una conversación que no cabe en el modelo local → nube. PAIR lee de LM Studio el contexto real del modelo cargado.
   4. Palabras clave (resume, traduce… → local; diseña, depura… → nube).
   5. Modo: `ahorro` (local), `equilibrado` (local si tu último mensaje es corto; el historial no cuenta) o `calidad` (nube).
-- **Generación de imágenes**: por defecto con tu generador local (`images.local_url`); con `@frontera`, en modo calidad o si el local falla, con OpenAI. En los clientes aparece como el modelo `pair-image`.
+- **Generación de imágenes**: por defecto con tu generador local (`images.local_url`); con `@frontera`, en modo calidad o si el local falla, con OpenAI. Desde un chat, escribe `@imagen` y la descripción: la imagen llega como respuesta en la propia conversación. En los clientes con generador de imágenes aparece como el modelo `pair-image`.
 - **Fallback**: si el backend elegido no responde, prueba con el otro (salvo contenido sensible).
 - **Streaming y herramientas** (tool calls) en los tres formatos.
 - **Registro** de cada decisión con su motivo, tokens, coste y ahorro.
