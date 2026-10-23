@@ -142,3 +142,12 @@ def test_stats_and_bench(make_client, tmp_path):
     store = client.app.state.pair.store
     n = store.export_bench(str(tmp_path / "bench.csv"))
     assert n == 2  # la sensible no se guarda
+
+
+def test_describe_request_structure():
+    from pair.app import describe
+    out = describe({"model": "x", "stream": True, "messages": [
+        {"role": "system", "content": "eres útil"},
+        {"role": "user", "content": [{"type": "text", "text": "hola"}, {"type": "file", "file": {"content": "abc"}}]}]})
+    assert "system: texto(9)" in out
+    assert "file['file']" in out and "otros campos: model, stream" in out

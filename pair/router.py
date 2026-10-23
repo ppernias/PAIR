@@ -27,11 +27,30 @@ class Decision:
 
 # ---------------------------------------------------------------- utilidades
 
+def _strings(value: Any) -> list[str]:
+    """Todo el texto legible de una parte de mensaje, sea cual sea su tipo.
+
+    Se saltan los datos binarios (imágenes o ficheros en base64), que no son texto.
+    """
+    if isinstance(value, str):
+        if value.startswith("data:") or (len(value) > 200 and " " not in value[:200]):
+            return []
+        return [value]
+    if isinstance(value, dict):
+        return [s for k, v in value.items() if k not in ("type", "detail", "mime_type", "mimeType")
+                for s in _strings(v)]
+    if isinstance(value, list):
+        return [s for v in value for s in _strings(v)]
+    return []
+
+
 def _text_of(content: Any) -> str:
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        return "\n".join(p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text")
+        # Cuenta también partes que no son "text" (p. ej. ficheros con su texto extraído),
+        # para que la privacidad y el tamaño de la petición las tengan en cuenta.
+        return "\n".join(s for p in content if isinstance(p, dict) for s in _strings(p))
     return ""
 
 

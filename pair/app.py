@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import copy
+import json
 import time
 import unicodedata
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -100,8 +102,37 @@ def _error(endpoint: str, err: BackendError) -> JSONResponse:
     return JSONResponse(body, status_code=status)
 
 
-def create_app(cfg: Config, **transports: Any) -> FastAPI:
+DEBUG_FILE = Path("~/.pair/last_request.json").expanduser()
+
+
+def describe(req: dict[str, Any]) -> str:
+    """Resumen de la estructura de una petición: rol y tipo/tamaño de cada parte."""
+    def part(p: Any) -> str:
+        if isinstance(p, str):
+            return f"texto({len(p)})"
+        if isinstance(p, dict):
+            kind = p.get("type") or next(iter(p), "?")
+            return f"{kind}{sorted(k for k in p if k != 'type')}({len(json.dumps(p, ensure_ascii=False))})"
+        return type(p).__name__
+
+    lines = []
+    for m in req.get("messages") or req.get("contents") or []:
+        content = m.get("content", m.get("parts"))
+        items = [part(content)] if isinstance(content, str) else [part(p) for p in content or []]
+        lines.append(f"  {m.get('role', '?')}: {', '.join(items) or 'vacío'}")
+    extras = sorted(k for k in req if k not in ("messages", "contents"))
+    return "\n".join(lines + [f"  otros campos: {', '.join(extras)}"])
+
+
+def create_app(cfg: Config, debug: bool = False, **transports: Any) -> FastAPI:
     pair = Pair(cfg, **transports)
+
+    def inspect(endpoint: str, req: dict[str, Any]) -> None:
+        if not debug:
+            return
+        DEBUG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        DEBUG_FILE.write_text(json.dumps(req, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"[debug] petición {endpoint} (completa en {DEBUG_FILE}):\n{describe(req)}", flush=True)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -143,6 +174,7 @@ def create_app(cfg: Config, **transports: Any) -> FastAPI:
     @app.post("/v1/chat/completions")
     async def openai_chat(request: Request):
         req = await request.json()
+        inspect("openai", req)
         return await handle("openai", req, bool(req.get("stream")),
                             lambda resp, model: resp,
                             lambda chunks, stats: tr.openai_stream_passthrough(chunks, stats))
@@ -155,6 +187,7 @@ def create_app(cfg: Config, **transports: Any) -> FastAPI:
     @app.post("/v1/messages")
     async def anthropic_messages(request: Request):
         req = await request.json()
+        inspect("anthropic", req)
         requested = req.get("model", "pair")
         return await handle("anthropic", tr.anthropic_to_openai(req), bool(req.get("stream")),
                             lambda resp, model: tr.openai_to_anthropic(resp, requested),
@@ -174,6 +207,7 @@ def create_app(cfg: Config, **transports: Any) -> FastAPI:
             inner = req.get("generateContentRequest") or req
             return {"totalTokens": estimate_tokens(tr.gemini_to_openai(inner))}
         stream = action == "streamGenerateContent"
+        inspect("gemini", req)
         if action not in ("generateContent", "streamGenerateContent"):
             return JSONResponse({"error": {"code": 404, "message": f"acción no soportada: {action}"}}, status_code=404)
         return await handle("gemini", tr.gemini_to_openai(req), stream,

@@ -13,7 +13,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-c", "--config", default="config.yaml", help="ruta a config.yaml")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("serve", help="arranca el proxy")
+    p_serve = sub.add_parser("serve", help="arranca el proxy")
+    p_serve.add_argument("--debug", action="store_true",
+                         help="muestra la estructura de cada petición y guarda la última en ~/.pair/last_request.json")
     p_stats = sub.add_parser("stats", help="resumen de ahorro")
     p_stats.add_argument("--days", type=float, default=30)
     p_log = sub.add_parser("log", help="últimas decisiones")
@@ -33,7 +35,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Aviso: no hay clave en la variable {cfg.cloud.api_key_env} ni en el llavero (servicio PAIR);"
                   " las peticiones a la nube fallarán.", file=sys.stderr)
         print(f"PAIR escuchando en http://{cfg.host}:{cfg.port}  (modo {cfg.mode})")
-        uvicorn.run(create_app(cfg), host=cfg.host, port=cfg.port, log_level="warning")
+        uvicorn.run(create_app(cfg, debug=args.debug), host=cfg.host, port=cfg.port, log_level="warning")
         return 0
 
     from .store import Store

@@ -50,3 +50,21 @@ def test_modes():
     assert decide(req("hola"), RULES, "calidad").target == CLOUD
     assert decide(req("hola"), RULES, "equilibrado").target == LOCAL
     assert decide(req("texto " * 3000), RULES, "equilibrado").target == CLOUD
+
+
+def test_non_text_parts_count_for_size_and_privacy():
+    from pair.router import estimate_tokens, is_sensitive
+    r = {"messages": [{"role": "user", "content": [
+        {"type": "text", "text": "resume"},
+        {"type": "file", "file": {"filename": "doc.pdf", "content": "palabra " * 400}}]}]}
+    assert estimate_tokens(r) > 700
+    r2 = {"messages": [{"role": "user", "content": [
+        {"type": "file", "file": {"content": "el DNI es 12345678Z"}}]}]}
+    assert is_sensitive(r2, RULES)
+
+
+def test_base64_is_not_counted_as_text():
+    from pair.router import estimate_tokens
+    r = {"messages": [{"role": "user", "content": [
+        {"type": "file", "file": {"file_data": "data:application/pdf;base64," + "A" * 40000}}]}]}
+    assert estimate_tokens(r) < 10
