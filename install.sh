@@ -41,8 +41,9 @@ ln -sf "$DIR/.venv/bin/pair" "$HOME/.local/bin/pair"
 
 say "4/5 Conectando con LM Studio"
 while true; do
-  HOST=$(ask "Equipo donde corre LM Studio" "mac-studio.local")
-  URL="http://$HOST:1234/v1"
+  HOST=$(ask "Equipo donde corre LM Studio (nombre o IP, con :puerto si no es 1234)" "localhost")
+  HOST="${HOST#http://}"; HOST="${HOST%%/*}"
+  case "$HOST" in *:*) URL="http://$HOST/v1" ;; *) URL="http://$HOST:1234/v1" ;; esac
   if MODELS=$(curl -fsS --max-time 5 "$URL/models" 2>/dev/null); then
     echo "LM Studio responde en $URL. Modelos: $(echo "$MODELS" | "$PY" -c 'import json,sys; print(", ".join(m["id"] for m in json.load(sys.stdin)["data"]))')"
     break
